@@ -76,6 +76,9 @@ mod update {
         /// The address(es) of the router to send packets to
         #[structopt(long = "address", short = "a", number_of_values(1))]
         pub addresses: Vec<PubKeyBin>,
+        /// Which OUI nonce this transaction has
+        #[structopt(long)]
+        pub nonce: Option<u64>,
         /// Commit the transaction to the API
         #[structopt(long)]
         pub commit: bool,
@@ -90,6 +93,9 @@ mod update {
         pub index: u32,
         /// 100kb or less
         pub filter: String,
+        /// Which OUI nonce this transaction has
+        #[structopt(long)]
+        pub nonce: Option<u64>,
         /// Commit the transaction to the API
         #[structopt(long)]
         pub commit: bool,
@@ -101,6 +107,9 @@ mod update {
         pub oui: u32,
         /// 100kb or less
         pub filter: String,
+        /// Which OUI nonce this transaction has
+        #[structopt(long)]
+        pub nonce: Option<u64>,
         /// Commit the transaction to the API
         #[structopt(long)]
         pub commit: bool,
@@ -112,6 +121,9 @@ mod update {
         pub oui: u32,
         #[structopt(long)]
         pub size: u32,
+        /// Which OUI nonce this transaction has
+        #[structopt(long)]
+        pub nonce: Option<u64>,
         /// Commit the transaction to the API
         #[structopt(long)]
         pub commit: bool,
@@ -199,10 +211,11 @@ impl Update {
         let keypair = wallet.decrypt(password.as_bytes())?;
         let api_client = Client::new_with_base_url(api_url());
 
-        let (oui, commit, update) = match self {
+        let (oui, commit, nonce, update) = match self {
             Update::Routers(routers) => (
                 routers.oui,
                 routers.commit,
+                routers.nonce,
                 helium_api::blockchain_txn_routing_v1::Update::UpdateRouters(UpdateRouters {
                     router_addresses: routers
                         .addresses
@@ -215,6 +228,7 @@ impl Update {
             Update::NewXor(filter) => (
                 filter.oui,
                 filter.commit,
+                filter.nonce,
                 helium_api::blockchain_txn_routing_v1::Update::NewXor(base64::decode(
                     &filter.filter,
                 )?),
@@ -222,6 +236,7 @@ impl Update {
             Update::UpdateXor(update) => (
                 update.oui,
                 update.commit,
+                update.nonce,
                 helium_api::blockchain_txn_routing_v1::Update::UpdateXor(UpdateXor {
                     index: update.index,
                     filter: base64::decode(&update.filter)?,
@@ -230,6 +245,7 @@ impl Update {
             Update::RequestSubset(size) => (
                 size.oui,
                 size.commit,
+                size.nonce,
                 helium_api::blockchain_txn_routing_v1::Update::RequestSubnet(size.size),
             ),
         };
@@ -241,7 +257,12 @@ impl Update {
             signature: vec![],
             staking_fee: 0,
             update: Some(update),
-            nonce: 0,
+            nonce: if let Some(nonce) = nonce {
+                nonce
+            } else {
+                //TODO: fetch nonce from API
+                0
+            },
         };
         txn.fee = txn.txn_fee(&get_txn_fees(&api_client)?)?;
         txn.staking_fee = txn.txn_staking_fee(&get_txn_fees(&api_client)?)?;
