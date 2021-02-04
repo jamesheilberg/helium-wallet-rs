@@ -1,10 +1,10 @@
 use super::TxnEnvelope;
 use crate::result::Result;
 use helium_api::{
-    BlockchainTxnAddGatewayV1, BlockchainTxnAssertLocationV1, BlockchainTxnCreateHtlcV1,
-    BlockchainTxnOuiV1, BlockchainTxnPaymentV1, BlockchainTxnPaymentV2, BlockchainTxnRedeemHtlcV1,
-    BlockchainTxnSecurityExchangeV1, BlockchainTxnTokenBurnV1, BlockchainTxnTransferHotspotV1,
-    Message,
+    blockchain_txn_routing_v1, BlockchainTxnAddGatewayV1, BlockchainTxnAssertLocationV1,
+    BlockchainTxnCreateHtlcV1, BlockchainTxnOuiV1, BlockchainTxnPaymentV1, BlockchainTxnPaymentV2,
+    BlockchainTxnRedeemHtlcV1, BlockchainTxnRoutingV1, BlockchainTxnSecurityExchangeV1,
+    BlockchainTxnTokenBurnV1, BlockchainTxnTransferHotspotV1, Message,
 };
 use serde_derive::{Deserialize, Serialize};
 
@@ -137,7 +137,7 @@ impl_txn_fee!(
     buyer_signature,
     seller_signature
 );
-
+impl_txn_fee!(BlockchainTxnRoutingV1, signature);
 impl TxnStakingFee for BlockchainTxnOuiV1 {
     fn txn_staking_fee(&self, config: &TxnFeeConfig) -> Result<u64> {
         let fee = config.staking_fee_txn_oui_v1
@@ -145,7 +145,20 @@ impl TxnStakingFee for BlockchainTxnOuiV1 {
         Ok(fee)
     }
 }
-
+impl TxnStakingFee for BlockchainTxnRoutingV1 {
+    fn txn_staking_fee(&self, config: &TxnFeeConfig) -> Result<u64> {
+        Ok(if let Some(update) = &self.update {
+            match update {
+                blockchain_txn_routing_v1::Update::RequestSubnet(size) => {
+                    *size as u64 * config.staking_fee_txn_oui_v1_per_address
+                }
+                _ => 0,
+            }
+        } else {
+            0
+        })
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
