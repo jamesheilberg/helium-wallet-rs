@@ -7,7 +7,9 @@ use crate::{
     result::Result,
     traits::{Sign, TxnEnvelope, TxnFee, B58, B64},
 };
-use helium_api::{BlockchainTxn, BlockchainTxnPaymentV2, Client, Hnt, Payment, PendingTxnStatus};
+use helium_api::{
+    Account, BlockchainTxn, BlockchainTxnPaymentV2, Client, Hnt, Payment, PendingTxnStatus,
+};
 use prettytable::Table;
 use serde_json::json;
 use std::str::FromStr;
@@ -41,13 +43,27 @@ impl Cmd {
         let keypair = wallet.decrypt(password.as_bytes())?;
         let account = client.get_account(&keypair.public.to_b58()?)?;
 
+        let mut sweep_destination = None;
+        let mut pay_total = 0;
+
         let payments: Result<Vec<Payment>> = self
             .payees
             .iter()
             .map(|p| {
+                let amount = if let Amount::HNT(amount) = p.amount {
+                    let amount = amount.to_bones();
+                    pay_total += amount;
+                    amount
+                } else if sweep_destination.is_none() {
+                    sweep_destination = Some(PubKeyBin::from_b58(&p.address)?.to_vec());
+                    0
+                } else {
+                    panic!("Cannot sweep to two addresses in the same transaction!")
+                };
+
                 Ok(Payment {
                     payee: PubKeyBin::from_b58(&p.address)?.into(),
-                    amount: p.amount.to_bones(),
+                    amount,
                 })
             })
             .collect();
@@ -60,10 +76,42 @@ impl Cmd {
         };
 
         txn.fee = if let Some(fee) = self.fee {
+            // if fee is set by hand, sweep calculation is non-iterative
+            // simply calculate_sweep once and set as payment to sweep_destination addr
+            if let Some(sweep_destination) = sweep_destination {
+                let amount = calculate_sweep(&client, &account, &pay_total, &txn.fee)?;
+                for payment in &mut txn.payments {
+                    if payment.payee == sweep_destination {
+                        payment.amount = amount;
+                    }
+                }
+            }
             fee
         } else {
-            txn.txn_fee(&get_txn_fees(&client)?)?
+            // if fee is set by hand, sweep calculation becomes iterative
+            // because the size of the transaction depends on the sweep amount
+            if let Some(sweep_destination) = sweep_destination {
+                let mut fee = txn.txn_fee(&get_txn_fees(&client)?)?;
+                loop {
+                    let sweep_amount = calculate_sweep(&client, &account, &pay_total, &fee)?;
+                    for payment in &mut txn.payments {
+                        if payment.payee == sweep_destination {
+                            payment.amount = sweep_amount;
+                        }
+                    }
+                    let new_fee = txn.txn_fee(&get_txn_fees(&client)?)?;
+                    if new_fee == fee {
+                        break;
+                    } else {
+                        fee = new_fee;
+                    }
+                }
+                fee
+            } else {
+                txn.txn_fee(&get_txn_fees(&client)?)?
+            }
         };
+
         txn.signature = txn.sign(&keypair)?;
         let envelope = txn.in_envelope();
         let status = if self.commit {
@@ -126,7 +174,25 @@ fn print_txn(
 #[derive(Debug)]
 pub struct Payee {
     address: String,
-    amount: Hnt,
+    amount: Amount,
+}
+
+#[derive(Debug)]
+enum Amount {
+    HNT(Hnt),
+    Sweep,
+}
+
+impl std::str::FromStr for Amount {
+    type Err = Box<dyn std::error::Error>;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        Ok(if s == "sweep" {
+            Amount::Sweep
+        } else {
+            Amount::HNT(Hnt::from_str(s)?)
+        })
+    }
 }
 
 impl FromStr for Payee {
@@ -140,5 +206,34 @@ impl FromStr for Payee {
             address: s[..pos].to_string(),
             amount: s[pos + 1..].parse()?,
         })
+    }
+}
+const HNT_TO_BONES_SCALAR: u64 = 100_000_000;
+
+fn calculate_sweep(
+    client: &helium_api::Client,
+    account: &Account,
+    pay_total: &u64,
+    fee: &u64,
+) -> Result<u64> {
+    // if account has the DCs for the charge,
+    // the sweep is simply the remaining balance after payment to others
+    if &account.dc_balance > fee {
+        Ok(account.balance - pay_total)
+    }
+    // otherwise, we need to leave enough HNT to pay
+    else {
+        // oracle price is given in $ 10^-8 / per HNT
+        let oracle_price = client.get_current_oracle_price()?;
+        // fee is given in DC, which is $ 10^-5
+        //
+        let fee = *fee * 1_000 * HNT_TO_BONES_SCALAR;
+        //
+        let bones_needed = fee / oracle_price + 1;
+        println!(
+            "fee = {}, oracle_price = {}, bones_needed = {} ",
+            fee, oracle_price, bones_needed
+        );
+        Ok(account.balance - pay_total - bones_needed)
     }
 }
