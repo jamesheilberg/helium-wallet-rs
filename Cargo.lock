@@ -667,7 +667,7 @@ dependencies = [
 [[package]]
 name = "helium-api"
 version = "1.1.4"
-source = "git+https://github.com/helium/helium-api-rs?tag=1.1.6#75825c37cb93f506906fe2ef77ece6a919f948f8"
+source = "git+https://github.com/helium/helium-api-rs?branch=lthiery/get-current-oracle-price#48328bb0482cb5f54aec04aede1362c722a1f69e"
 dependencies = [
  "base64",
  "helium-proto",
