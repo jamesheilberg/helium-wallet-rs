@@ -226,10 +226,12 @@ fn calculate_sweep(
         // oracle price is given in $ 10^-8 / per HNT
         let oracle_price = client.get_current_oracle_price()?;
         // fee is given in DC, which is $ 10^-5
-        //
-        let fee = *fee * 1_000 * HNT_TO_BONES_SCALAR;
-        //
-        let bones_needed = fee / oracle_price + 1;
+        // scale by 10*3 to normalize with oracle price
+        let fee = *fee * 1_000;
+        // oracle_price is per HNT but we need to know how many bones to leave behind
+        // apply the HNT_TO_BONES scalar to the fee before division to maximize accuracy
+        // add one bone for rounding error
+        let bones_needed = (fee * HNT_TO_BONES_SCALAR) / oracle_price + 1;
         println!(
             "fee = {}, oracle_price = {}, bones_needed = {} ",
             fee, oracle_price, bones_needed
