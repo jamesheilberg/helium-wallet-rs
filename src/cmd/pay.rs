@@ -24,6 +24,11 @@ pub struct Cmd {
     #[structopt(long = "payee", short = "p", name = "payee=hnt", required = true)]
     payees: Vec<Payee>,
 
+    /// Optionally set how many minutes in the future oracle prices should be considered for
+    /// Set to 0 for "optimistic" submission with current price
+    #[structopt(long, default_value = "120")]
+    oracle_window: u64,
+
     /// Manually set DC fee to pay for the transaction
     #[structopt(long)]
     fee: Option<u64>,
@@ -79,7 +84,8 @@ impl Cmd {
             // if fee is set by hand, sweep calculation is non-iterative
             // simply calculate_sweep once and set as payment to sweep_destination addr
             if let Some(sweep_destination) = sweep_destination {
-                let amount = calculate_sweep(&client, &account, &pay_total, &txn.fee)?;
+                let amount =
+                    calculate_sweep(&client, &account, &pay_total, &txn.fee, &self.oracle_window)?;
                 for payment in &mut txn.payments {
                     if payment.payee == sweep_destination {
                         payment.amount = amount;
@@ -93,7 +99,8 @@ impl Cmd {
             if let Some(sweep_destination) = sweep_destination {
                 let mut fee = txn.txn_fee(&get_txn_fees(&client)?)?;
                 loop {
-                    let sweep_amount = calculate_sweep(&client, &account, &pay_total, &fee)?;
+                    let sweep_amount =
+                        calculate_sweep(&client, &account, &pay_total, &fee, &self.oracle_window)?;
                     for payment in &mut txn.payments {
                         if payment.payee == sweep_destination {
                             payment.amount = sweep_amount;
@@ -214,31 +221,61 @@ fn calculate_sweep(
     account: &Account,
     pay_total: &u64,
     fee: &u64,
+    oracle_window: &u64,
 ) -> Result<u64> {
     use rust_decimal::{prelude::ToPrimitive, Decimal};
     use std::convert::TryInto;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     // if account has the DCs for the charge,
     // the sweep is simply the remaining balance after payment to others
     if &account.dc_balance > fee {
         Ok(account.balance - pay_total)
     }
-    // otherwise, we need to leave enough HNT to pay
+    // otherwise, we need to leave enough HNT to pay the txn fee via implicit burn
     else {
-        // oracle price is given in 8 digit decimal $/HNT
-        let oracle_price = client.get_oracle_price_current()?;
-        // fee was given in DC, which is $ 10^-5
-        let fee = Decimal::new((*fee).try_into()?, 5);
-        let mut hnt_needed = fee / oracle_price.get_decimal();
-        // change scale by 8 decimals to get value in bones
-        hnt_needed.set_scale(bones_needed.scale() - 8)?;
-        // ceil rounds up for us and change into u64 for txn building
-        let bones_needed = bones_needed.ceil().to_u64().unwrap();
+        // if window == 0, simply return the current price
+        let oracle_price = if *oracle_window == 0 {
+            client.get_oracle_price_current()?
+        }
+        // else, use the oracle_window, give in minutes to select max price
+        else {
+            let now = SystemTime::now().duration_since(UNIX_EPOCH)?;
+            let mut oracle_prices = client.get_oracle_price_predictions()?;
+            // filter down predictions that are not in window
+            oracle_prices.retain(|prediction| {
+                let prediction_time = prediction.time() as u64;
+                // sometimes API may be lagging real time, so if prediction is already passed
+                // retain this value
+                if prediction_time < now.as_secs() {
+                    true
+                } else {
+                    // true if prediction time is within window
+                    prediction_time - now.as_secs() < oracle_window * 60
+                }
+            });
 
-        println!(
-            "fee = {}, oracle_price = {:?}, bones_needed = {:?} ",
-            fee, oracle_price, bones_needed
-        );
+            // take max of all predictions
+            oracle_prices
+                .iter()
+                .fold(client.get_oracle_price_current()?, |max, x| {
+                    if max.get_decimal() < x.price.get_decimal() {
+                        x.price
+                    } else {
+                        max
+                    }
+                })
+        };
+
+        // fee was given in DC, which is $ 10^-5
+        // express the decimal in $
+        let fee = Decimal::new((*fee).try_into()?, 5);
+        // simple decimal division tells you the amount of HNT needed
+        let mut hnt_needed = fee / oracle_price.get_decimal();
+        // change scale by 8 decimals - we want to implicit burn fee in bones
+        hnt_needed.set_scale(hnt_needed.scale() - 8)?;
+        // ceil rounds up for us and change into u64 for txn building
+        let bones_needed = hnt_needed.ceil().to_u64().unwrap();
         Ok(account.balance - pay_total - bones_needed)
     }
 }
