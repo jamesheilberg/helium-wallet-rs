@@ -255,9 +255,8 @@ fn calculate_remaining_hnt(
         // if window == 0, simply return the current oracle price
         let oracle_price = if *oracle_window == 0 {
             client.get_oracle_price_current()?
-        }
         // else, use the oracle_window, given in minutes to select max price
-        else {
+        } else {
             let now = SystemTime::now().duration_since(UNIX_EPOCH)?;
             let mut oracle_prices = client.get_oracle_price_predictions()?;
             // filter down predictions that are not in window
