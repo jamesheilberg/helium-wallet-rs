@@ -208,7 +208,6 @@ impl FromStr for Payee {
         })
     }
 }
-const HNT_TO_BONES_SCALAR: u64 = 100_000_000;
 
 fn calculate_sweep(
     client: &helium_api::Client,
@@ -216,6 +215,9 @@ fn calculate_sweep(
     pay_total: &u64,
     fee: &u64,
 ) -> Result<u64> {
+    use rust_decimal::{prelude::ToPrimitive, Decimal};
+    use std::convert::TryInto;
+
     // if account has the DCs for the charge,
     // the sweep is simply the remaining balance after payment to others
     if &account.dc_balance > fee {
@@ -223,17 +225,18 @@ fn calculate_sweep(
     }
     // otherwise, we need to leave enough HNT to pay
     else {
-        // oracle price is given in $ 10^-8 / per HNT
-        let oracle_price = client.get_current_oracle_price()?;
-        // fee is given in DC, which is $ 10^-5
-        // scale by 10*3 to normalize with oracle price
-        let fee = *fee * 1_000;
-        // oracle_price is per HNT but we need to know how many bones to leave behind
-        // apply the HNT_TO_BONES scalar to the fee before division to maximize accuracy
-        // add one bone for rounding error
-        let bones_needed = (fee * HNT_TO_BONES_SCALAR) / oracle_price + 1;
+        // oracle price is given in 8 digit decimal $/HNT
+        let oracle_price = client.get_oracle_price_current()?;
+        // fee was given in DC, which is $ 10^-5
+        let fee = Decimal::new((*fee).try_into()?, 5);
+        let mut hnt_needed = fee / oracle_price.get_decimal();
+        // change scale by 8 decimals to get value in bones
+        hnt_needed.set_scale(bones_needed.scale() - 8)?;
+        // ceil rounds up for us and change into u64 for txn building
+        let bones_needed = bones_needed.ceil().to_u64().unwrap();
+
         println!(
-            "fee = {}, oracle_price = {}, bones_needed = {} ",
+            "fee = {}, oracle_price = {:?}, bones_needed = {:?} ",
             fee, oracle_price, bones_needed
         );
         Ok(account.balance - pay_total - bones_needed)
