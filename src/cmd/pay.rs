@@ -24,12 +24,12 @@ pub struct Cmd {
     #[structopt(long = "payee", short = "p", name = "payee=hnt", required = true)]
     payees: Vec<Payee>,
 
-    /// Optionally set how many minutes in the future oracle prices should be considered for
+    /// Set how many minutes in the future oracle prices should be considered for.
     /// Set to 0 for "optimistic" submission with current price
     #[structopt(long, default_value = "120")]
     oracle_window: u64,
 
-    /// Manually set DC fee to pay for the transaction
+    /// Option to manually set DC fee to pay for the transaction
     #[structopt(long)]
     fee: Option<u64>,
 
@@ -99,33 +99,41 @@ impl Cmd {
             }
             fee
         } else {
-            // if fee is set by hand, sweep calculation becomes iterative
-            // because the size of the transaction depends on the sweep amount
-            if let Some(sweep_destination) = sweep_destination {
-                let mut fee = txn.txn_fee(&get_txn_fees(&client)?)?;
-                loop {
-                    let sweep_amount = calculate_remaining_hnt(
-                        &client,
-                        &account,
-                        &pay_total,
-                        &fee,
-                        &self.oracle_window,
-                    )?;
-                    for payment in &mut txn.payments {
-                        if payment.payee == sweep_destination {
-                            payment.amount = sweep_amount;
+            match sweep_destination {
+                // if there is no sweep destination, txn fees are simply calculated
+                None => txn.txn_fee(&get_txn_fees(&client)?)?,
+                // if there is a sweep destination, the txn fees are iteratively determined
+                // since the amount being swept affects the fee (protobuf encoding size changes)
+                Some(sweep_destination) => {
+                    let mut fee = txn.txn_fee(&get_txn_fees(&client)?)?;
+                    loop {
+                        // sweep amount is remaining HNT after accounting for txn fees
+                        let sweep_amount = calculate_remaining_hnt(
+                            &client,
+                            &account,
+                            &pay_total,
+                            &fee,
+                            &self.oracle_window,
+                        )?;
+                        // update the txn with the amount for the sweep payee
+                        for payment in &mut txn.payments {
+                            if payment.payee == sweep_destination {
+                                payment.amount = sweep_amount;
+                            }
+                        }
+
+                        // calculate fee based on the new txn size
+                        let new_fee = txn.txn_fee(&get_txn_fees(&client)?)?;
+
+                        // if the fee matches, we are done iterating
+                        if new_fee == fee {
+                            break;
+                        } else {
+                            fee = new_fee;
                         }
                     }
-                    let new_fee = txn.txn_fee(&get_txn_fees(&client)?)?;
-                    if new_fee == fee {
-                        break;
-                    } else {
-                        fee = new_fee;
-                    }
+                    fee
                 }
-                fee
-            } else {
-                txn.txn_fee(&get_txn_fees(&client)?)?
             }
         };
 
