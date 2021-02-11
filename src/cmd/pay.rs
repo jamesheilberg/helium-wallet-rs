@@ -84,8 +84,13 @@ impl Cmd {
             // if fee is set by hand, sweep calculation is non-iterative
             // simply calculate_sweep once and set as payment to sweep_destination addr
             if let Some(sweep_destination) = sweep_destination {
-                let amount =
-                    calculate_sweep(&client, &account, &pay_total, &txn.fee, &self.oracle_window)?;
+                let amount = calculate_remaining_hnt(
+                    &client,
+                    &account,
+                    &pay_total,
+                    &txn.fee,
+                    &self.oracle_window,
+                )?;
                 for payment in &mut txn.payments {
                     if payment.payee == sweep_destination {
                         payment.amount = amount;
@@ -99,8 +104,13 @@ impl Cmd {
             if let Some(sweep_destination) = sweep_destination {
                 let mut fee = txn.txn_fee(&get_txn_fees(&client)?)?;
                 loop {
-                    let sweep_amount =
-                        calculate_sweep(&client, &account, &pay_total, &fee, &self.oracle_window)?;
+                    let sweep_amount = calculate_remaining_hnt(
+                        &client,
+                        &account,
+                        &pay_total,
+                        &fee,
+                        &self.oracle_window,
+                    )?;
                     for payment in &mut txn.payments {
                         if payment.payee == sweep_destination {
                             payment.amount = sweep_amount;
@@ -216,7 +226,7 @@ impl FromStr for Payee {
     }
 }
 
-fn calculate_sweep(
+fn calculate_remaining_hnt(
     client: &helium_api::Client,
     account: &Account,
     pay_total: &u64,
@@ -244,7 +254,7 @@ fn calculate_sweep(
             let mut oracle_prices = client.get_oracle_price_predictions()?;
             // filter down predictions that are not in window
             oracle_prices.retain(|prediction| {
-                let prediction_time = prediction.time() as u64;
+                let prediction_time = prediction.time as u64;
                 // sometimes API may be lagging real time, so if prediction is already passed
                 // retain this value
                 if prediction_time < now.as_secs() {
