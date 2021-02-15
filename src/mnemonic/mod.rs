@@ -45,15 +45,15 @@ pub fn mnemonic_to_entropy(words: Vec<String>) -> Result<[u8; 32]> {
 
     let language = Language::English;
 
-    let mut bit_vec = Vec::with_capacity(words.len());
-    for user_word in words.iter() {
-        let idx_bits = match language.find_word(user_word) {
-            Some(idx) => format!("{:011b}", idx),
-            _ => return Err(format!("Seed word {} not found in wordlist", user_word).into()),
-        };
-        bit_vec.push(idx_bits);
-    }
-    let bits = bit_vec.join("");
+    let bits = words
+        .iter()
+        .map(|w| {
+            language
+                .find_word(w)
+                .ok_or_else(|| format!("Seed word {} not found in wordlist", w).into())
+                .map(|idx| format!("{:011b}", idx))
+        })
+        .collect::<Result<String>>()?;
 
     let divider_index: usize = ((bits.len() as f64 / 33.0) * 32.0).floor() as usize;
     let (entropy_bits, checksum_bits) = bits.split_at(divider_index);
