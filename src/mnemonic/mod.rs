@@ -8,9 +8,31 @@ pub enum Language {
     English,
 }
 
-fn get_wordlist(language: Language) -> WordList {
-    match language {
-        Language::English => WORDS_ENGLISH,
+impl Language {
+    pub fn find_word(&self, user_word: &str) -> Option<usize> {
+        match self {
+            Language::English => Self::find_english_word(user_word),
+        }
+    }
+
+    fn find_english_word(user_word: &str) -> Option<usize> {
+        // BIP39: the wordlist is created in such a way that it's
+        //        enough to type the first four letters to
+        //        unambiguously identify the word
+        const MIN_CMP_LEN: usize = 4;
+        let user_word = user_word.to_ascii_lowercase();
+        for (idx, &list_word) in WORDS_ENGLISH.iter().enumerate() {
+            if user_word.len() >= MIN_CMP_LEN
+                && list_word.len() >= MIN_CMP_LEN
+                && user_word[..MIN_CMP_LEN] == list_word[..MIN_CMP_LEN]
+            {
+                return Some(idx);
+            }
+            if user_word == list_word {
+                return Some(idx);
+            }
+        }
+        None
     }
 }
 
@@ -20,13 +42,14 @@ pub fn mnemonic_to_entropy(words: Vec<String>) -> Result<[u8; 32]> {
     if words.len() != 12 {
         return Err("Invalid number of seed words".into());
     }
-    let wordlist = get_wordlist(Language::English);
+
+    let language = Language::English;
 
     let mut bit_vec = Vec::with_capacity(words.len());
-    for word in words.iter() {
-        let idx_bits = match wordlist.iter().position(|s| *s == word.to_lowercase()) {
+    for user_word in words.iter() {
+        let idx_bits = match language.find_word(user_word) {
             Some(idx) => format!("{:011b}", idx),
-            _ => return Err(format!("Seed word {} not found in wordlist", word).into()),
+            _ => return Err(format!("Seed word {} not found in wordlist", user_word).into()),
         };
         bit_vec.push(idx_bits);
     }
@@ -67,9 +90,22 @@ mod tests {
     use bs58;
 
     #[test]
-    fn decode_words() {
+    fn decode_full_words() {
         // The words and entryopy here were generated from the JS mobile-wallet implementation
         let words = "catch poet clog intact scare jacket throw palm illegal buyer allow figure";
+        let expected_entropy = bs58::decode("3RrA1FDa6mdw5JwKbUxEbZbMcJgSyWjhNwxsbX5pSos8")
+            .into_vec()
+            .expect("decoded entropy");
+
+        let word_list = words.split_whitespace().map(|w| w.to_string()).collect();
+        let entropy = mnemonic_to_entropy(word_list).expect("entropy");
+        assert_eq!(expected_entropy, entropy);
+    }
+
+    #[test]
+    fn decode_partial_words() {
+        // The words and entryopy here were generated from the JS mobile-wallet implementation
+        let words = "catc poet clog inta scar jack thro palm ille buye allo figu";
         let expected_entropy = bs58::decode("3RrA1FDa6mdw5JwKbUxEbZbMcJgSyWjhNwxsbX5pSos8")
             .into_vec()
             .expect("decoded entropy");
