@@ -113,4 +113,18 @@ mod tests {
         let entropy = mnemonic_to_entropy(word_list).expect("entropy");
         assert_eq!(expected_entropy, entropy);
     }
+
+    #[test]
+    fn decode_three_letter_and_truncated() {
+        //           pond heart cage off just payment disorder picture wine gesture draw slot
+        let words = "pond heart cage off just paymen  diso     picture wine gestu   draw slot";
+        let expected_entropy = bs58::decode("CJ2e4jqyn6AYk6fvgPkqiDmE9JMh8SivLnp3GY2DKTbT")
+            .into_vec()
+            .expect("decoded entropy");
+
+        let word_list = words.split_whitespace().map(|w| w.to_string()).collect();
+        let entropy = mnemonic_to_entropy(word_list).expect("entropy");
+        println!("{:02x?}", entropy);
+        assert_eq!(expected_entropy, entropy);
+    }
 }
