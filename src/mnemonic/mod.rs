@@ -1,8 +1,7 @@
 use crate::result::Result;
 use regex::Regex;
-include!(concat!(env!("OUT_DIR"), "/english.rs"));
 
-type WordList = &'static [&'static str];
+static WORDS_ENGLISH: &str = include_str!("wordlists/english.txt");
 
 pub enum Language {
     English,
@@ -21,7 +20,7 @@ impl Language {
         //        unambiguously identify the word
         const MIN_CMP_LEN: usize = 4;
         let user_word = user_word.to_ascii_lowercase();
-        for (idx, &list_word) in WORDS_ENGLISH.iter().enumerate() {
+        for (idx, list_word) in WORDS_ENGLISH.lines().enumerate() {
             if user_word.len() >= MIN_CMP_LEN
                 && list_word.len() >= MIN_CMP_LEN
                 && user_word[..MIN_CMP_LEN] == list_word[..MIN_CMP_LEN]
